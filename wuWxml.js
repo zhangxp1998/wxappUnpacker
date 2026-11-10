@@ -1,5 +1,5 @@
 const wu = require("./wuLib.js");
-const {getZ} = require("./wuRestoreZ.js");
+const {getZ, restoreAll} = require("./wuRestoreZ.js");
 const {wxsBeautify} = require("./wuJs.js");
 const fs = require('fs');
 const path = require("path");
@@ -129,8 +129,6 @@ function analyze(core, z, namePool, xPool, fakePool = {}, zMulName = "0") {
                                 });
                                 break;
                             case "_m": {
-                                if (dec.init.arguments[2].elements.length > 0)
-                                    throw Error("Noticable generics content: " + dec.init.arguments[2].toString());
                                 let mv = {};
                                 let name = null, base = 0;
                                 for (let x of dec.init.arguments[1].elements) {
@@ -149,12 +147,17 @@ function analyze(core, z, namePool, xPool, fakePool = {}, zMulName = "0") {
                                         name = null;
                                     }
                                 }
+                                const generics = dec.init.arguments[2].elements;
+                                for (let i = 0; i < generics.length; i += 2) {
+                                    const key = generics[i]?.value;
+                                    const index = generics[i + 1]?.value;
+                                    if (typeof key !== 'string' || typeof index !== 'number') throw Error('Unknown component generic');
+                                    mv['generic:' + key.replace(/^wx-/, '')] = z[index];
+                                }
                                 push(dec.id.name, {tag: dec.init.arguments[0].value, son: [], v: mv});
                             }
                                 break;
                             case "_mz": {
-                                if (dec.init.arguments[3].elements.length > 0)
-                                    throw Error("Noticable generics content: " + dec.init.arguments[3].toString());
                                 let mv = {};
                                 let name = null, base = 0;
                                 for (let x of dec.init.arguments[2].elements) {
@@ -172,6 +175,13 @@ function analyze(core, z, namePool, xPool, fakePool = {}, zMulName = "0") {
                                         }
                                         name = null;
                                     }
+                                }
+                                const generics = dec.init.arguments[3].elements;
+                                for (let i = 0; i < generics.length; i += 2) {
+                                    const key = generics[i]?.value;
+                                    const index = generics[i + 1]?.value;
+                                    if (typeof key !== 'string' || typeof index !== 'number') throw Error('Unknown component generic');
+                                    mv['generic:' + key.replace(/^wx-/, '')] = z.mul[zMulName][index];
                                 }
                                 push(dec.id.name, {tag: dec.init.arguments[1].value, son: [], v: mv});
                             }
@@ -373,10 +383,105 @@ function doWxs(code) {
     return wxsBeautify(code.slice(code.indexOf(before) + before.length, code.lastIndexOf('return nv_module.nv_exports;}')).replace(/nv\_/g, ''));
 }
 
+// Newer compilers concatenate many $gwx_XC_N factories into one frame. Each
+// factory owns its own x indexes and gz$gwx expression groups. Slicing from
+// the last nv_require to the last path guard crosses factory boundaries and
+// leaves a `return` at top level. Run only the registration part of each
+// factory (with no path), then feed its entries to the existing WXML restorer.
+function doMultiFrame(name, content, cb, moreInfo, mainDir) {
+    let code = content;
+    if (name.endsWith('.html')) {
+        const scripts = [...content.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
+        code = scripts.find(match => /\$gwx\d*_XC_0\s*=\s*function/.test(match[1]))?.[1] || content;
+    }
+    let ast;
+    try { ast = esprima.parseScript(code, {range: true}); }
+    catch { return false; }
+    const frames = ast.body.filter(node => node.type === 'ExpressionStatement'
+        && node.expression.type === 'AssignmentExpression'
+        && /^\$gwx\d*(?:_XC_\d+)?$/.test(node.expression.left.name || '')
+        && node.expression.right.type === 'CallExpression'
+        && node.expression.right.callee.type === 'FunctionExpression');
+    if (frames.length < 2) return false;
+
+    const shared = {entrys: {}, defines: {}, modules: {}};
+    const sandbox = {
+        __WXML_GLOBAL__: {ops_set: {}, ops_cached: {}, ops_init: {}, modules: {}},
+        outerGlobal: {}, window: {},
+        nv_require: path => () => path,
+        __wxshimRequireStub: path => () => path,
+        __wxshimShared: shared,
+        __wxshimArgs: []
+    };
+    const vm = createVM(sandbox);
+    const contexts = new Map();
+    const requireInfo = {};
+    for (const node of frames) {
+        const factory = node.expression.right.callee;
+        const inner = factory.body.body[0]?.argument;
+        if (inner?.type !== 'FunctionExpression') throw new Error('Unexpected $gwx factory in ' + name);
+        const groups = inner.body.body.filter(stmt => stmt.type === 'FunctionDeclaration'
+            && stmt.id.name.startsWith('gz$gwx')).map(stmt => stmt.id.name);
+        const requireStmt = inner.body.body.find(stmt => stmt.type === 'VariableDeclaration'
+            && stmt.declarations.some(decl => decl.id.name === 'nv_require'));
+        const requireDecl = requireStmt?.declarations.find(decl => decl.id.name === 'nv_require');
+        const nnm = requireDecl?.init?.callee?.body?.body
+            .flatMap(stmt => stmt.type === 'VariableDeclaration' ? stmt.declarations : [])
+            .find(decl => decl.id.name === 'nnm')?.init;
+        const requireExpr = nnm ? code.slice(nnm.range[0], nnm.range[1]) : '{}';
+        const groupExpr = groups.map(id => JSON.stringify(id.slice(6)) + ':' + id + '()').join(',');
+        let factoryHead = code.slice(factory.range[0], inner.body.range[1] - 1);
+        if (requireDecl?.init) {
+            const from = requireDecl.init.range[0] - factory.range[0];
+            const to = requireDecl.init.range[1] - factory.range[0];
+            factoryHead = factoryHead.slice(0, from) + '__wxshimRequireStub' + factoryHead.slice(to);
+        }
+        const factoryCode = factoryHead
+            + '\nreturn {x,z,requireInfo:' + requireExpr + ',groups:{' + groupExpr + '}};\n'
+            + code.slice(inner.body.range[1] - 1, factory.range[1]);
+        const before = new Set(Object.keys(shared.entrys));
+        sandbox.__wxshimArgs = Array(factory.params.length).fill(() => undefined);
+        const result = vm.run('(' + factoryCode + ')(...__wxshimArgs)(undefined,__wxshimShared)');
+        Object.assign(requireInfo, result.requireInfo);
+        const z = restoreAll(structuredClone(result.z));
+        z.mul = restoreAll({mul: structuredClone(result.groups)}).mul;
+        for (const entry of Object.keys(shared.entrys)) {
+            if (!before.has(entry)) contexts.set(entry, {z, x: result.x});
+        }
+    }
+
+    const dir = mainDir || path.dirname(name);
+    const pF = [];
+    for (const info in shared.modules) if (typeof shared.modules[info] === 'function') {
+        const file = path.resolve(dir, (info[0] === '/' ? '.' : '') + info);
+        const ref = shared.modules[info]();
+        pF[ref] = info;
+        if (requireInfo[ref]) wu.save(file, doWxs(requireInfo[ref].toString()));
+    }
+    for (const info in shared.modules) if (typeof shared.modules[info] === 'object') {
+        const file = path.resolve(dir, (info[0] === '/' ? '.' : '') + info);
+        const res = [];
+        for (const deps in shared.modules[info]) {
+            const ref = shared.modules[info][deps]();
+            if (ref.includes(':') && requireInfo[ref]) res.push('<wxs module="' + deps + '">\n' + doWxs(requireInfo[ref].toString()) + '\n</wxs>');
+            else if (pF[ref]) res.push('<wxs module="' + deps + '" src="' + wu.toDir(pF[ref], info) + '" />');
+            else res.push('<wxs module="' + deps + '" src="' + wu.toDir(ref.slice(2), info) + '" />');
+        }
+        wxsList[file] = res.join('\n');
+    }
+    for (const [entry, {z, x}] of contexts) {
+        tryWxml(dir, entry, shared.entrys[entry].f.toString(), z, x, shared.defines[entry], wxsList, moreInfo);
+    }
+    console.log('Restored ' + contexts.size + ' WXML entries from ' + frames.length + ' frame segments.');
+    cb({[name]: 4});
+    return true;
+}
+
 function doFrame(name, cb, order, mainDir) {
     let moreInfo = order.includes("m");
     wxsList = {};
     wu.get(name, code => {
+        if (doMultiFrame(name, code, cb, moreInfo, mainDir)) return;
         getZ(code, z => {
             const before = "\nvar nv_require=function(){var nnm=";
             code = code.slice(code.lastIndexOf(before) + before.length, code.lastIndexOf("if(path&&e_[path]){"));

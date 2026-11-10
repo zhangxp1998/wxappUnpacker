@@ -274,6 +274,7 @@ function restoreAll(z) {
 }
 
 module.exports = {
+    restoreAll,
     getZ(code, cb) {
         catchZ(code, z => cb(restoreAll(z)));
     }

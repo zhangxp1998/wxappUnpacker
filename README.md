@@ -1,10 +1,12 @@
 # wxappUnpacker
 
-[![CI](https://github.com/threecha/wxappUnpacker/actions/workflows/ci.yml/badge.svg)](https://github.com/threecha/wxappUnpacker/actions/workflows/ci.yml)
+[![CI](https://github.com/zhangxp1998/wxappUnpacker/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangxp1998/wxappUnpacker/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-%3E%3D22-339933.svg)](https://nodejs.org/)
 
 基于 Node.js 的微信小程序 `.wxapkg` 解包与资源还原工具。项目可以提取包内文件，并尝试还原 JavaScript、JSON、WXML、WXSS 和 WXS；支持主包、分包和批量处理。
+
+这是 [threecha/wxappUnpacker](https://github.com/threecha/wxappUnpacker) 的 fork，加入了较新编译格式的多段 WXML/WXSS、组件泛型和脚本拆分修复。
 
 > 本项目只用于学习、调试、兼容性研究以及分析你自己拥有或已获明确授权的小程序。请遵守软件许可、平台规则和适用法律，不要提取、传播或使用未经授权的代码、数据、密钥及个人信息。
 
@@ -28,7 +30,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/threecha/wxappUnpacker.git
+git clone https://github.com/zhangxp1998/wxappUnpacker.git
 cd wxappUnpacker
 npm ci
 ```
@@ -144,19 +146,15 @@ Invalid wxapkg magic number. The package may be encrypted, damaged, or use an un
 
 ## 安全说明
 
-资源还原过程需要执行包内生成的 JavaScript。项目使用 `vm2` 并默认启用以下限制：
+资源还原过程需要执行包内生成的 JavaScript。项目使用 Node.js 内置 `vm`，单次执行默认 10 秒超时。`vm` 不是安全隔离边界；处理不可信包时，请在没有敏感文件和凭据的一次性容器或虚拟机中运行。
 
-- 单次 VM 执行超时：10 秒。
-- 禁止异步任务。
-- 单次 Buffer 分配上限：32 MiB。
-
-可在特殊情况下调整：
+可调整单次执行超时：
 
 ```bash
-WXAPP_VM_TIMEOUT_MS=20000 WXAPP_VM_BUFFER_LIMIT_MB=64 node wuWxapkg.js app.wxapkg
+WXAPP_VM_TIMEOUT_MS=20000 node wuWxapkg.js app.wxapkg
 ```
 
-允许范围分别是 100–60000 毫秒和 1–256 MiB。`vm2` 是同一 Node.js 进程内的隔离层，不应作为唯一安全边界。处理未知或不可信包时，请在没有公司凭据、私钥和敏感文件的容器或一次性虚拟机中运行。参见 [vm2 安全说明](https://github.com/patriksimek/vm2#important-security-disclaimer)。
+允许范围是 100–60000 毫秒。
 
 ## 常见问题
 
@@ -174,7 +172,7 @@ WXAPP_VM_TIMEOUT_MS=20000 WXAPP_VM_BUFFER_LIMIT_MB=64 node wuWxapkg.js app.wxapk
 
 ### 提交错误报告
 
-请使用仓库的 [Issue 模板](https://github.com/threecha/wxappUnpacker/issues/new/choose)，提供系统、Node.js 版本、提交 SHA、执行命令和脱敏日志。
+请使用仓库的 [Issue 模板](https://github.com/zhangxp1998/wxappUnpacker/issues/new/choose)，提供系统、Node.js 版本、提交 SHA、执行命令和脱敏日志。
 
 ## 技术资料与致谢
 

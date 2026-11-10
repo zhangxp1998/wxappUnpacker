@@ -50,10 +50,15 @@ function doConfig(configFile, cb) {
     let dir = path.dirname(configFile);
     wu.get(configFile, content => {
         let e = JSON.parse(content);
+        const serviceFile = path.resolve(dir, "app-service.js");
+        const definedJs = fs.existsSync(serviceFile)
+            ? new Set([...fs.readFileSync(serviceFile, "utf8").matchAll(/\bdefine\(\s*["']([^"']+\.js)["']/g)].map(match => match[1]))
+            : new Set();
         let k = e.pages;
         k.splice(k.indexOf(wu.changeExt(e.entryPagePath)), 1);
         k.unshift(wu.changeExt(e.entryPagePath));
         let app = {pages: k, window: e.global && e.global.window, tabBar: e.tabBar, networkTimeout: e.networkTimeout};
+        if (e.resolveAlias && typeof e.resolveAlias === "object") app.resolveAlias = e.resolveAlias;
         if (e.subPackages) {
             let subPackages = [];
             let pages = app.pages;
@@ -89,7 +94,7 @@ function doConfig(configFile, cb) {
                 createVM({
                         __wxAppCode__: attachInfo
                 }).run(matches.join(""));
-                for (let name in attachInfo) e.page[wu.changeExt(name, ".html")] = {window: attachInfo[name]};
+                for (let name in attachInfo) if (name !== "app.json") e.page[wu.changeExt(name, ".html")] = {window: attachInfo[name]};
             }
         }
         let delWeight = 8;
@@ -99,7 +104,8 @@ function doConfig(configFile, cb) {
             //添加默认的 wxs, wxml, wxss
             let jsName = wu.changeExt(a, ".js");
             let fileNameOfWxs = path.resolve(dir, jsName);
-            wu.save(fileNameOfWxs, "// " + jsName + "\nPage({data: {}})");
+            if (!definedJs.has(jsName) && !fs.existsSync(fileNameOfWxs))
+                wu.save(fileNameOfWxs, "// " + jsName + "\nPage({data: {}})");
             let wxmlName = wu.changeExt(a, ".wxml");
             let fileNameOfWxml = path.resolve(dir, wxmlName);
             wu.save(fileNameOfWxml, "<!--" + wxmlName + "--><text>" + wxmlName + "</text>");

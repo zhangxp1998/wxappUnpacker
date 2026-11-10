@@ -5,6 +5,38 @@ const {createVM} = require("./wuSandbox.js");
 const cssbeautify = require('cssbeautify');
 const csstree = require('css-tree');
 const cheerio = require('cheerio');
+const esprima = require('esprima');
+
+function multiFrameCss(code) {
+    if (!/\$gwx\d*_XC_0\s*=\s*function/.test(code)) return null;
+    let ast;
+    try { ast = esprima.parseScript(code, {range: true}); }
+    catch { return null; }
+    const main = ast.body.find(node => node.type === 'ExpressionStatement'
+        && node.expression.type === 'AssignmentExpression'
+        && /^\$gwx\d*$/.test(node.expression.left.name || ''));
+    if (!main) return null;
+    const blocks = ast.body.filter(node => node.range[0] > main.range[0]
+        && node.type === 'IfStatement'
+        && node.test.type === 'UnaryExpression' && node.test.operator === '!'
+        && node.test.argument.name === 'noCss');
+    if (blocks.length < 2) return null;
+    const output = ['var noCss=false;'];
+    for (const block of blocks) {
+        let source = code.slice(block.range[0], block.range[1]);
+        // The generated function needs a DOM. runVM supplies its own collector.
+        const declarations = block.consequent.body.filter(stmt => stmt.type === 'VariableDeclaration'
+            && stmt.declarations.some(decl => decl.id.name === 'setCssToHead'));
+        for (const stmt of declarations.reverse()) {
+            const start = stmt.range[0] - block.range[0];
+            const end = stmt.range[1] - block.range[0];
+            source = source.slice(0, start) + source.slice(end);
+        }
+        output.push(source);
+    }
+    console.log('Isolated CSS from ' + blocks.length + ' frame segments.');
+    return output.join('\n');
+}
 
 function chomp_balanced(input_str, scan_start, open_char, close_char) {
     const quote_chars = ['\"', '\''];
@@ -120,7 +152,7 @@ function doWxss(dir, cb, mainDir, nowDir) {
         }
 
         function makeup(data) {
-            var isPure = typeof data === "number";
+            var isPure = typeof data === "number" || (typeof data === "string" && Object.hasOwn(pureData, data));
             if (onlyTest) {
                 statistic(data);
                 if (!isPure) {
@@ -307,7 +339,8 @@ function doWxss(dir, cb, mainDir, nowDir) {
                 userAgent: "iPhone"
             };
 
-            scriptCode = scriptCode.slice(scriptCode.lastIndexOf('window.__wcc_version__'));
+            scriptCode = multiFrameCss(scriptCode)
+                || scriptCode.slice(scriptCode.lastIndexOf('window.__wcc_version__'));
             let mainCode = 'window= ' + JSON.stringify(window) +
                 ';\nnavigator=' + JSON.stringify(navigator) +
                 ';\nvar __mainPageFrameReady__ = window.__mainPageFrameReady__ || function(){};var __WXML_GLOBAL__={entrys:{},defines:{},modules:{},ops:[],wxs_nf_init:undefined,total_ops:0};var __vd_version_info__=__vd_version_info__||{}' +
@@ -315,9 +348,11 @@ function doWxss(dir, cb, mainDir, nowDir) {
 
             //remove setCssToHead function
             let setCssToHeadFuctionStartIndex = mainCode.indexOf("var setCssToHead = function");
-            let setCssToHeadFunctionParamIndexes = chomp_balanced(mainCode, setCssToHeadFuctionStartIndex, '(', ')');
-            let setCssToHeadFunctionEndIndexes = chomp_balanced(mainCode, setCssToHeadFunctionParamIndexes.end + 1, '{', '}');
-            mainCode = mainCode.substr(0, setCssToHeadFuctionStartIndex) + mainCode.substr(setCssToHeadFunctionEndIndexes.end + 1);
+            if (setCssToHeadFuctionStartIndex !== -1) {
+                let setCssToHeadFunctionParamIndexes = chomp_balanced(mainCode, setCssToHeadFuctionStartIndex, '(', ')');
+                let setCssToHeadFunctionEndIndexes = chomp_balanced(mainCode, setCssToHeadFunctionParamIndexes.end + 1, '{', '}');
+                mainCode = mainCode.substr(0, setCssToHeadFuctionStartIndex) + mainCode.substr(setCssToHeadFunctionEndIndexes.end + 1);
+            }
 
             //remove var __wxAppCode__ = {};
             // let wxAppCodeVarDeclare = "var __wxAppCode__={};";
@@ -339,9 +374,9 @@ function doWxss(dir, cb, mainDir, nowDir) {
                     if (importCnt[id] <= 1) {
                         console.log("Cannot find pure import for _C[" + id + "] which is only imported " + importCnt[id] + " times. Let importing become copying.");
                     } else {
-                        let newFile = path.resolve(dir, "__wuBaseWxss__/" + id + ".wxss");
+                        let newFile = path.resolve(dir, "__wuBaseWxss__", /^\d+$/.test(id) ? id + ".wxss" : id);
                         console.log("Cannot find pure import for _C[" + id + "], force to save it in (" + newFile + ").");
-                        id = Number.parseInt(id);
+                        if (/^\d+$/.test(id)) id = Number.parseInt(id);
                         actualPure[id] = newFile;
                         cssRebuild.call({cssFile: newFile}, id)();
                     }

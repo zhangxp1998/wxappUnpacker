@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/threecha/wxappUnpacker.git"
+    "url": "git+https://github.com/zhangxp1998/wxappUnpacker.git"
   },
   "author": "threecha <threecha@163.com>",
   "contributors": [
@@ -22,9 +22,9 @@
   ],
   "license": "GPL-3.0-or-later",
   "bugs": {
-    "url": "https://github.com/threecha/wxappUnpacker/issues"
+    "url": "https://github.com/zhangxp1998/wxappUnpacker/issues"
   },
-  "homepage": "https://github.com/threecha/wxappUnpacker#readme",
+  "homepage": "https://github.com/zhangxp1998/wxappUnpacker#readme",
   "dependencies": {
     "cheerio": "^1.2.0",
     "css-tree": "^3.2.1",
@@ -33,7 +33,6 @@
     "esprima": "^4.0.1",
     "handlebars": "^4.7.9",
     "js-beautify": "^2.0.3",
-    "uglify-js": "^3.19.3",
-    "vm2": "^3.11.5"
+    "uglify-js": "^3.19.3"
   }
 }
